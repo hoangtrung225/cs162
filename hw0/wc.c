@@ -21,5 +21,6 @@ int main(int argc, char *argv[]) {
   }
   while(readChar != EOF);
   printf("character in file: %d", counter -1);
+  getc(stdin);
   return 0;
 }
