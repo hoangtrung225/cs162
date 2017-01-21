@@ -120,14 +120,98 @@ void init_shell() {
   }
 }
 
+// my function definition
+int exe_proc(struct tokens *tokens){
+    //redirection enable
+    int redirectoken = -1;
+
+    char pathHolder[4096];
+    char* headPtr = NULL, *tailPtr = NULL;
+    headPtr = getenv("PATH");
+    while((tailPtr = strchr(headPtr, ':')) != NULL){
+      //make full path binary
+      int pathLen = tailPtr - headPtr;
+      strncpy(pathHolder, headPtr, pathLen);
+      pathHolder[pathLen] = '/';
+
+      int tokenlen = tokens_get_length(tokens);
+      if(tokenlen > 0)
+        strncpy(pathHolder + pathLen + 1, tokens_get_token(tokens, 0), 4096 - pathLen - 1);
+
+      //make array argv
+      char** argvlist = malloc(sizeof(char*) * tokenlen +1);
+      for(int i = 0; i < tokenlen; i++){
+        argvlist[i] = tokens_get_token(tokens, i);
+        if(strcmp(argvlist[i], ">") == 0 || strcmp(argvlist[i], "<") == 0){
+          redirectoken = i;
+        }
+      }
+      argvlist[0] = pathHolder;
+      argvlist[tokenlen] = NULL;
+
+      //fork and execute if file is executeable
+      if(access(pathHolder,F_OK) == 0 && access(pathHolder, X_OK) == 0){
+        // int infd = 3, outfd = 4;
+        // dup2(0, infd);
+        // dup2(1, outfd);
+        pid_t pidfork;
+        if((pidfork = fork()) == -1) printf("fork error\n");
+
+        if(pidfork == 0){
+          //thread redirection
+          if(redirectoken != -1){
+            int fdirect;
+            switch (argvlist[redirectoken][0]) {
+              case '<':
+                argvlist[redirectoken] = NULL;
+                fdirect = open(argvlist[redirectoken+1], O_CREAT|O_RDONLY, 0644);
+                // dup2(fdirect, 0);
+                int inputforkid;
+                if((inputforkid = fork()) == -1) printf("fork error! \n");
+                if(inputforkid == 0)
+                {
+                  int READTRUNK = 1024;
+                  char buffer[READTRUNK];
+                  while(read(fdirect, buffer, READTRUNK - 1) > 0)
+                    write(0, buffer, READTRUNK);
+                  fflush(0);
+                  exit(0);
+                }
+                else
+                  execv(pathHolder, argvlist);
+              case '>':
+                argvlist[redirectoken] = NULL;
+                fdirect = open(argvlist[redirectoken+1], O_CREAT|O_TRUNC|O_WRONLY, 0644);
+                dup2(fdirect, 1);
+                execv(pathHolder, argvlist);
+            }
+          }
+          else{
+            execv(pathHolder, argvlist);
+          }
+        printf("execv return false value %s\n", strerror(errno));
+        exit(0);
+        }
+        else {
+          waitpid(pidfork, NULL, 0);
+          // dup2(infd, 0);
+          // dup2(outfd, 1);
+        }
+        redirectoken = -1;
+        break;
+      }
+      else{
+        // printf("command %s %s\n",pathHolder, strerror(errno));
+      }
+      headPtr = tailPtr + 1;
+    }
+    return 1;
+}
 int main(unused int argc, unused char *argv[]) {
   init_shell();
 
   static char line[4096];
   int line_num = 0;
-
-  //redirection enable
-  int redirectoken = -1;
 
   /* Please only print shell prompts when standard input is not a tty */
   if (shell_is_interactive)
@@ -143,78 +227,7 @@ int main(unused int argc, unused char *argv[]) {
     if (fundex >= 0) {
       cmd_table[fundex].fun(tokens);
     } else {
-      /* REPLACE this to run commands as programs. */
-      //fprintf(stdout, "This shell doesn't know how to run programs.\n"
-      char pathHolder[4096];
-      char* headPtr = NULL, *tailPtr = NULL;
-      headPtr = getenv("PATH");
-      while((tailPtr = strchr(headPtr, ':')) != NULL){
-        //make full path binary
-        int pathLen = tailPtr - headPtr;
-        strncpy(pathHolder, headPtr, pathLen);
-        pathHolder[pathLen] = '/';
-
-        int tokenlen = tokens_get_length(tokens);
-        if(tokenlen > 0)
-          strncpy(pathHolder + pathLen + 1, tokens_get_token(tokens, 0), 4096 - pathLen - 1);
-
-        //make array argv
-        char** argvlist = malloc(sizeof(char*) * tokenlen +1);
-        for(int i = 0; i < tokenlen; i++){
-          argvlist[i] = tokens_get_token(tokens, i);
-          if(strcmp(argvlist[i], ">") == 0 || strcmp(argvlist[i], "<") == 0){
-            redirectoken = i;
-          }
-        }
-        argvlist[0] = pathHolder;
-        argvlist[tokenlen] = NULL;
-
-        //fork and execute if file is executeable
-        if(access(pathHolder,F_OK) == 0 && access(pathHolder, X_OK) == 0){
-          printf("%s exist and execuable\n", pathHolder);
-          // int infd = 3, outfd = 4;
-          // dup2(0, infd);
-          // dup2(1, outfd);
-          pid_t pidfork;
-          if((pidfork = fork()) == -1) printf("fork error\n");
-
-          if(pidfork == 0){
-            printf("fork and execv %s\n", pathHolder);
-            //thread redirection
-            if(redirectoken != -1){
-              int fdirect;
-              switch (argvlist[redirectoken][0]) {
-                case '<':
-                  argvlist[redirectoken] = NULL;
-                  fdirect = open(argvlist[redirectoken+1], O_CREAT|O_TRUNC|O_RDONLY, 0644);
-                  dup2(fdirect, 0);
-                  execv(pathHolder, argvlist);
-                case '>':
-                  argvlist[redirectoken] = NULL;
-                  fdirect = open(argvlist[redirectoken+1], O_CREAT|O_TRUNC|O_WRONLY, 0644);
-                  dup2(fdirect, 1);
-                  execv(pathHolder, argvlist);
-              }
-            }
-            else{
-              execv(pathHolder, argvlist);
-            }
-          printf("execv return false value %s\n", strerror(errno));
-          exit(0);
-          }
-          else {
-            waitpid(pidfork, NULL, 0);
-            // dup2(infd, 0);
-            // dup2(outfd, 1);
-          }
-          break;
-        }
-        else{
-          // printf("command %s %s\n",pathHolder, strerror(errno));
-        }
-        headPtr = tailPtr + 1;
-      }
-
+      exe_proc(tokens);
     }
 
     if (shell_is_interactive)
