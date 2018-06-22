@@ -17,7 +17,7 @@
 
 #include "libhttp.h"
 #include "wq.h"
-
+#include "filehandlers.h"
 /*
  * Global configuration variables.
  * You need to use these in your implementation of handle_files_request and
@@ -50,17 +50,69 @@ void handle_files_request(int fd) {
    * any existing code.
    */
 
+  // fork child process and execute, parent return
+  pid_t pid = fork();
+  if (pid == -1){
+    fprintf(stderr, "fork error\n");
+    return;
+  }
+  if (pid > 0){
+    close(fd);
+    return;
+  }
+  if (pid == 0){
+
   struct http_request *request = http_request_parse(fd);
 
-  http_start_response(fd, 200);
-  http_send_header(fd, "Content-Type", "text/html");
-  http_end_headers(fd);
-  http_send_string(fd,
-      "<center>"
-      "<h1>Welcome to httpserver!</h1>"
-      "<hr>"
-      "<p>Nothing's here yet.</p>"
-      "</center>");
+    // http_start_response(fd, 200);
+    // http_send_header(fd, "Content-Type", "text/html");
+    // http_end_headers(fd);
+    // http_send_string(fd,
+    //     "<center>"
+    //     "<h1>Welcome to httpserver!</h1>"
+    //     "<hr>"
+    //     "<p>Nothing's here yet.</p>"
+    //     "</center>");
+    if(request == NULL){
+      fprintf(stderr, "fail to parse connected file descriptor\n");
+      return;
+    }
+    do {
+      if(strcmp(request->method, "GET") != 0){
+        http_start_response(fd, 405);
+        http_end_headers(fd);
+        break;
+      }
+      if(request->path[0] != '/'){
+        http_start_response(fd, 400);
+        http_end_headers(fd);
+        break;
+      }
+
+      char* file_serve = malloc(strlen(server_files_directory) + strlen(request->path) + 1);
+      memcpy(file_serve, server_files_directory, strlen(server_files_directory));
+      memcpy(file_serve + strlen(server_files_directory), request->path, strlen(request->path));
+      file_serve[strlen(server_files_directory) + strlen(request->path)] = '\0';
+
+      struct stat stat_file;
+      if(stat(file_serve, &stat_file) == -1) break;
+
+      //handle requested file
+      if(S_ISREG(stat_file.st_mode)){
+        handle_request_file(fd, file_serve);
+        break;
+      }
+      else if(S_ISDIR(stat_file.st_mode)){
+        handle_request_dir(fd, file_serve);
+        break;
+      }
+    } while(0);
+    free(request->method);
+    free(request->path);
+    free(request);
+    close(fd);
+    exit(0);
+  }
 }
 
 

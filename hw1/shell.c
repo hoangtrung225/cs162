@@ -9,6 +9,9 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 
 #include "tokenizer.h"
 
@@ -29,6 +32,8 @@ pid_t shell_pgid;
 
 int cmd_exit(struct tokens *tokens);
 int cmd_help(struct tokens *tokens);
+int cmd_pwd(struct tokens *tokens);
+int cmd_cd(struct tokens *tokens);
 
 /* Built-in command functions take token array (see parse.h) and return int */
 typedef int cmd_fun_t(struct tokens *tokens);
@@ -43,6 +48,8 @@ typedef struct fun_desc {
 fun_desc_t cmd_table[] = {
   {cmd_help, "?", "show this help menu"},
   {cmd_exit, "exit", "exit the command shell"},
+  {cmd_pwd, "pwd", "print current directory"},
+  {cmd_cd, "cd", "change directory"},
 };
 
 /* Prints a helpful description for the given command */
@@ -55,6 +62,28 @@ int cmd_help(unused struct tokens *tokens) {
 /* Exits this shell */
 int cmd_exit(unused struct tokens *tokens) {
   exit(0);
+}
+
+int cmd_pwd(unused struct tokens *tokens){
+  char cwd[1024];
+  getcwd(cwd, sizeof(cwd));
+  if(cwd == NULL)
+    return 1;
+  else
+    fprintf(stdout,"%s\n", cwd);
+  return 0;
+}
+
+int cmd_cd(unused struct tokens *tokens){
+  char* dir;
+  if(tokens == NULL)
+    return 1;
+  else{
+    dir = tokens_get_token(tokens, 1);
+    if(dir != NULL)
+      chdir(dir);
+  }
+  return 0;
 }
 
 /* Looks up the built-in command, if it exists. */
@@ -91,6 +120,94 @@ void init_shell() {
   }
 }
 
+// my function definition
+int fork_exec(char** argvlist, int argstdin, int argstdout){
+  pid_t pidfork;
+  if((pidfork = fork()) == -1) printf("fork error\n");
+
+  if(pidfork == 0){
+      int pgid = getpid();
+      setpgid(pgid, pgid);
+      // tcsetpgrp(shell_terminal, pgid);
+
+      //process redirection
+      int fdirect;
+
+      if(argstdin > 0){
+          argvlist[argstdin] = NULL;
+          fdirect = open(argvlist[argstdin+1], O_CREAT|O_RDONLY, 0644);
+          dup2(fdirect, 0);
+        }
+      if(argstdout > 0){
+        argvlist[argstdout] = NULL;
+          fdirect = open(argvlist[argstdout+1], O_CREAT|O_TRUNC|O_WRONLY, 0644);
+          dup2(fdirect, 1);
+        }
+
+      // if(argstdout > 0 && argstdin > 0){
+      //     int term;
+      //     term = argstdin < argstdout ? argstdin: argstdout;
+      //     argvlist[term] = NULL;
+      //   }
+      execv(argvlist[0], argvlist);
+
+      printf("execv not expected to return %s\n", strerror(errno));
+      exit(0);
+  }
+  else {
+    tcsetpgrp(shell_terminal, pidfork);
+    waitpid(pidfork, NULL, 0);
+  }
+  //parrent return after waitpi
+  return 0;
+}
+
+
+
+int exe_proc(struct tokens *tokens){
+    //redirection enable
+    int argstdin = -1, argstdout = -1;
+    char pathHolder[4096];
+
+    int tokenlen = tokens_get_length(tokens);
+    if(tokenlen < 1) return 1;
+
+    //make array argv
+    char** argvlist = malloc(sizeof(char*) * tokenlen +1);
+    for(int i = 0; i < tokenlen; i++){
+      argvlist[i] = tokens_get_token(tokens, i);
+      if(strcmp(argvlist[i], ">") == 0)
+        argstdout = i;
+      if(strcmp(argvlist[i], "<") == 0)
+        argstdin = i;
+    }
+
+    if(tokenlen < 1) return 1;
+    strncpy(pathHolder, tokens_get_token(tokens, 0), 4096);
+    argvlist[0] = pathHolder;
+    argvlist[tokenlen] = NULL;
+
+    if(access(pathHolder,F_OK) == 0 && access(pathHolder, X_OK) == 0)
+      fork_exec(argvlist, argstdin, argstdout);
+    else{
+      char* headPtr = NULL, *tailPtr = NULL;
+      headPtr = getenv("PATH");
+      while((tailPtr = strchr(headPtr, ':')) != NULL){
+      //make full path binary
+        int pathLen = tailPtr - headPtr;
+        strncpy(pathHolder, headPtr, pathLen);
+        pathHolder[pathLen] = '/';
+        strncpy(pathHolder + pathLen + 1, tokens_get_token(tokens, 0), 4096 - pathLen - 1);
+      //fork and execute if file is executeable
+        if(access(pathHolder,F_OK) == 0 && access(pathHolder, X_OK) == 0){
+          fork_exec(argvlist, argstdin, argstdout);
+          break;
+        }
+        headPtr = tailPtr + 1;
+    }
+  }
+  return 1;
+}
 int main(unused int argc, unused char *argv[]) {
   init_shell();
 
@@ -111,8 +228,7 @@ int main(unused int argc, unused char *argv[]) {
     if (fundex >= 0) {
       cmd_table[fundex].fun(tokens);
     } else {
-      /* REPLACE this to run commands as programs. */
-      fprintf(stdout, "This shell doesn't know how to run programs.\n");
+      exe_proc(tokens);
     }
 
     if (shell_is_interactive)
